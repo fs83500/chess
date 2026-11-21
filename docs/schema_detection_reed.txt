@@ -1,0 +1,108 @@
+   DÉTECTION DE LA POSITION DES PIÈCES — Option A : capteurs Reed
+   ===============================================================
+
+   PRINCIPE
+   --------
+   Chaque pièce d'échecs contient un petit aimant (pastille néodyme collée
+   sous la feutrine). Sous CHAQUE case du plateau, un interrupteur Reed
+   (ILS) se ferme quand un aimant est présent au-dessus de lui.
+
+   Une case "occupée"   = Reed fermé  = 1
+   Une case "vide"      = Reed ouvert = 0
+
+
+   COUPE LATÉRALE D'UNE CASE (vue de côté)
+   ---------------------------------------
+
+        pièce (avec aimant)
+          ┌──┐
+          │ ♙ │  ← aimant néodyme dans la base
+          └──┘
+       ════════════  surface du plateau (bois/ferro)
+            │
+            │  champ magnétique qui traverse
+            │
+       ─────┴───────  dessous du plateau
+          ╔═══╗
+          ║ ◌ ║  ← capteur Reed (ILS) collé sous la case
+          ╚═══╝
+            │
+            └──→ vers le multiplexeur → ESP32
+
+   → Le Reed se ferme (contact) dès qu'un aimant est ~3-5 mm au-dessus.
+
+
+   MATRICE 8×8 (64 capteurs) — vue de dessus
+   -----------------------------------------
+
+       C0  C1  C2  C3  C4  C5  C6  C7     ← 8 colonnes (lues)
+       │   │   │   │   │   │   │   │
+   R7 ─┼─ ●──●──●──●──●──●──●──●── h8     ← 8 rangées (activées
+   R6 ─┼─ ●──●──●──●──●──●──●──●── h7        une par une)
+   R5 ─┼─ ●──●──●──●──●──●──●──●── h5
+   R4 ─┼─ ●──●──●──●──●──●──●──●── h4
+   R3 ─┼─ ●──●──●──●──●──●──●──●── h3
+   R2 ─┼─ ●──●──●──●──●──●──●──●── h2
+   R1 ─┼─ ●──●──●──●──●──●──●──●── h1
+   R0 ─┴─ ●──●──●──●──●──●──●──●── a1-h1
+
+       ● = un capteur Reed à l'intersection (64 au total)
+
+   Lecture par balayage de rangée (matrice keypad-like) :
+     - on active R0, on lit C0..C7 → état de la rangée 0
+     - on active R1, on lit C0..C7 → état de la rangée 1
+     - ... 8 fois → on a toute la grille en ~1 ms
+
+
+   CÂBLAGE VERS L'ESP32 (pour ne pas utiliser 64 GPIO)
+   ---------------------------------------------------
+
+                   ESP32
+              ┌──────────────┐
+              │  GPIO 16..22 │── 8 lignes colonnes (C0..C7) [entrées]
+              │  + pull-down │
+              │              │
+              │  GPIO 4,5,   │── 3 bits sélection rangée → décodeur
+              │  12,15       │
+              └──────┬───────┘
+                     │ 3 bits (8 rangées)
+                     ▼
+              ┌──────────────┐
+              │  3→8 décodeur │   ex: 74HC138
+              │  (active une │   active UNE rangée à la fois
+              │   rangée Rn)  │   (sortie active basse)
+              └──────┬───────┘
+                     │
+                     ▼  R0..R7 vers la matrice 8×8
+
+   Avantage: 8 + 3 = 11 broches ESP32 au lieu de 64.
+
+
+   COMMENT L'ESP32 EN DÉDUIT LE COUP HUMAIN
+   ----------------------------------------
+
+   L'ESP32 garde en mémoire l'état précédent de la matrice (avant le coup).
+   Quand le joueur a fini de bouger:
+
+     état_avant:   e2=occupé, e4=vide
+     état_après:   e2=vide,    e4=occupé
+
+   → "une case passée d'occupée à vide" = départ du coup
+   → "une case passée de vide à occupée" = arrivée du coup
+   → coup reconstitué = e2 → e4
+
+   Cas particuliers gérés par le moteur d'échecs:
+     • roque       : 2 pièces bougent (roi + tour)
+     • en passant  : une 3e case se vide (le pion capturé)
+     • promotion   : la case de départ se vide, l'arrivée reste occupée
+                     (le type de pièce doit être confirmé — voir note)
+
+
+   NOTE — limite du Reed pur
+   -------------------------
+   Un Reed ne dit que "présence/absence", PAS le type de pièce (cavalier vs
+   dame...). Pour identifier la promotion, il faut soit:
+     - un capteur de champ plus riche (MLX90393) qui distingue les pièces
+       par la force/forme de leur aimant, soit
+     - une déduction logique (un pion arrive sur la 8e rangée → c'est une
+       promotion → demander au joueur via bouton/encodeur quelle pièce).
